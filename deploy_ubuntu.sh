@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # 先提示输入 -> 再安装/运行 的 Aztec CLI 一键脚本（前台运行）
+# - 强制从 /dev/tty 读输入，确保总能看到提示并交互
+# - 自动将登录用户加入 docker 组，并以 -g docker 运行需要用到 docker 的命令
 # 用法：sudo -E ./aztec_cli_run.sh
 
 # --- 确保用 bash 运行 ---
@@ -23,6 +25,12 @@ mkdir -p "$CONFIG_DIR" "$LOG_DIR"; chmod 700 "$CONFIG_DIR"; touch "$CONFIG_FILE"
 c(){ printf "\033[%sm%s\033[0m\n" "$1" "$2"; }
 info(){ c "1;34" "ℹ️  $*"; }; ok(){ c "1;32" "✓ $*"; }; warn(){ c "1;33" "⚠️  $*"; }; err(){ c "1;31" "✗ $*"; }
 
+# ===== 若无交互终端，直接报错退出（防止读不到输入）=====
+if [[ ! -t 0 && ! -e /dev/tty ]]; then
+  err "未检测到交互终端，无法读取输入。请在交互式 shell 中运行本脚本。"
+  exit 100
+fi
+
 # ===== 读入旧配置（如有）=====
 # shellcheck disable=SC1090
 source "$CONFIG_FILE" || true
@@ -33,13 +41,14 @@ is_privkey(){ [[ "${1:-}" =~ ^0x[0-9a-fA-F]{64}$ ]]; }
 is_ethaddr(){ [[ "${1:-}" =~ ^0x[0-9a-fA-F]{40}$ ]]; }
 is_ipv4(){ [[ "${1:-}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
 
-# ===== 安全输入（支持默认/保密/最多重试）=====
+# ===== 安全输入（从 /dev/tty 读取；支持默认/保密/最多重试）=====
 ASK_TRIES=5
 ask_url(){
   local var="$1" prompt="$2" curr input
   curr="${!var-}"
   for ((i=1;i<=ASK_TRIES;i++)); do
-    read -r -p "$prompt${curr:+ [默认: $curr]}: " input
+    printf "%s" "$prompt${curr:+ [默认: $curr]}: " >/dev/tty
+    IFS= read -r input </dev/tty || true
     [[ -z "$input" ]] && input="$curr"
     if is_url "$input"; then printf -v "$var" '%s' "$input"; return 0; fi
     err "URL 无效（需 http:// 或 https://）($i/$ASK_TRIES)"
@@ -51,10 +60,12 @@ ask_secret(){
   curr="${!var-}"
   for ((i=1;i<=ASK_TRIES;i++)); do
     if [[ -n "$curr" ]]; then
-      read -r -s -p "$prompt [已保存，回车不变]: " input; echo
+      printf "%s" "$prompt [已保存，回车不变]: " >/dev/tty
+      IFS= read -rs input </dev/tty || true; echo >/dev/tty
       [[ -z "$input" ]] && { printf -v "$var" '%s' "$curr"; return 0; }
     else
-      read -r -s -p "$prompt: " input; echo
+      printf "%s" "$prompt: " >/dev/tty
+      IFS= read -rs input </dev/tty || true; echo >/dev/tty
     fi
     if "$validator" "$input"; then printf -v "$var" '%s' "$input"; return 0; fi
     err "格式不正确 ($i/$ASK_TRIES)"
@@ -65,7 +76,8 @@ ask_plain(){
   local var="$1" prompt="$2" validator="$3" curr input
   curr="${!var-}"
   for ((i=1;i<=ASK_TRIES;i++)); do
-    read -r -p "$prompt${curr:+ [默认: $curr]}: " input
+    printf "%s" "$prompt${curr:+ [默认: $curr]}: " >/dev/tty
+    IFS= read -r input </dev/tty || true
     [[ -z "$input" ]] && input="$curr"
     if "$validator" "$input"; then printf -v "$var" '%s' "$input"; return 0; fi
     err "格式不正确 ($i/$ASK_TRIES)"
@@ -83,8 +95,9 @@ ask_url ETHEREUM_HOSTS "EL RPC URL（执行层，示例：https://eth-sepolia.g.
 ask_url L1_CONSENSUS_HOST_URLS "CL RPC URL（Beacon 共识层，示例：https://.../beacon）"
 ask_secret VALIDATOR_PRIVATE_KEY "验证者私钥（0x+64hex）" is_privkey
 ask_plain COINBASE "COINBASE 地址（0x+40hex）" is_ethaddr
-# P2P_IP 可选：留空时自动用检测到的公网 IPv4
-read -r -p "P2P 对外 IPv4（可回车自动使用检测值 ${PUB_IP:-<无>}）: " P2P_IN
+# P2P_IP 可选
+printf "%s" "P2P 对外 IPv4（可回车自动使用检测值 ${PUB_IP:-<无>}）: " >/dev/tty
+P2P_IN=""; IFS= read -r P2P_IN </dev/tty || true
 if [[ -z "$P2P_IN" ]]; then
   P2P_IP="${P2P_IP:-$PUB_IP}"
 else
@@ -93,17 +106,19 @@ else
 fi
 
 # ===== 确认摘要 =====
-echo "----------------------------------"
-echo "EL RPC: $ETHEREUM_HOSTS"
-echo "CL RPC: $L1_CONSENSUS_HOST_URLS"
-echo "COINBASE: $COINBASE"
-echo "P2P_IP: ${P2P_IP:-<未设置>（将由 CLI/环境决定）}"
-echo "私钥: ****${VALIDATOR_PRIVATE_KEY: -6}"
-echo "----------------------------------"
-read -r -p "确认以上信息并继续安装/运行？(y/N): " _go
+echo "----------------------------------" >/dev/tty
+echo "EL RPC: $ETHEREUM_HOSTS" >/dev/tty
+echo "CL RPC: $L1_CONSENSUS_HOST_URLS" >/dev/tty
+echo "COINBASE: $COINBASE" >/dev/tty
+echo "P2P_IP: ${P2P_IP:-<未设置>（可不填）}" >/dev/tty
+echo "私钥: ****${VALIDATOR_PRIVATE_KEY: -6}" >/dev/tty
+echo "----------------------------------" >/dev/tty
+printf "%s" "确认以上信息并继续安装/运行？(y/N): " >/dev/tty
+_go=""; IFS= read -r _go </dev/tty || true
 [[ "$_go" =~ ^[yY]$ ]] || { warn "已取消。"; exit 0; }
 
 # ===== 保存配置（仅 root 可读）=====
+mkdir -p "$CONFIG_DIR"
 cat > "$CONFIG_FILE" <<EOF
 ETHEREUM_HOSTS="$ETHEREUM_HOSTS"
 L1_CONSENSUS_HOST_URLS="$L1_CONSENSUS_HOST_URLS"
@@ -114,12 +129,12 @@ EOF
 chmod 600 "$CONFIG_FILE"
 ok "配置已保存：$CONFIG_FILE"
 
-# ===== 依赖 =====
+# ===== 基础依赖 =====
 info "安装通用依赖（curl gnupg lsb-release jq netcat-openbsd ufw）…"
 apt-get update -y -o Acquire::Retries=3
 apt-get install -y ca-certificates curl gnupg lsb-release jq netcat-openbsd ufw
 
-# ===== Docker（keyrings 稳定安装；失败降级到 docker.io）=====
+# ===== 安装/配置 Docker（官方源 + keyrings，失败降级到 docker.io）=====
 if ! command -v docker >/dev/null 2>&1; then
   info "安装 Docker（官方源 + keyrings）…"
   rm -f /etc/apt/keyrings/docker.gpg || true
@@ -137,11 +152,22 @@ if ! command -v docker >/dev/null 2>&1; then
     apt-get install -y docker.io docker-compose-plugin
   fi
   systemctl enable --now docker
-  usermod -aG docker "${SUDO_USER:-$USER}" || true
   ok "Docker 安装完成。"
 else
   ok "Docker 已安装：$(docker --version | head -n1)"
   systemctl enable --now docker
+fi
+
+# ===== 将登录用户加入 docker 组（永久权限）=====
+if ! getent group docker >/dev/null 2>&1; then
+  groupadd docker
+fi
+if [[ -n "${SUDO_USER:-}" ]]; then
+  if ! id -nG "$SUDO_USER" | tr ' ' '\n' | grep -qx docker; then
+    info "将用户 $SUDO_USER 加入 docker 组…"
+    usermod -aG docker "$SUDO_USER" || true
+    ok "已加入 docker 组（新会话生效）。"
+  fi
 fi
 
 # ===== UFW =====
@@ -154,7 +180,7 @@ ok "UFW 就绪。"
 ensure_path_line='export PATH="$HOME/.aztec/bin:$PATH"'
 aztec_exists(){ sudo -u "$TARGET_USER" bash -lc 'command -v aztec >/dev/null 2>&1 || [[ -x "$HOME/.aztec/bin/aztec" ]]'; }
 if ! aztec_exists; then
-  info "安装 Aztec CLI…（需要可用 Docker）"
+  info "安装 Aztec CLI…（以 docker 组身份运行安装器）"
   sudo -u "$TARGET_USER" -g docker bash -lc 'bash -i <(curl -s https://install.aztec.network)'
   if ! sudo -u "$TARGET_USER" bash -lc "grep -Fq '$ensure_path_line' '$TARGET_BASHRC' 2>/dev/null"; then
     echo "$ensure_path_line" >> "$TARGET_BASHRC"; chown "$TARGET_USER":"$TARGET_USER" "$TARGET_BASHRC"
@@ -166,7 +192,7 @@ else
   ok "Aztec CLI 已安装。"
 fi
 
-# ===== 前台运行 =====
+# ===== 前台运行（以 docker 组身份，Ctrl+C 停止）=====
 cat <<'TXT'
 ---------------------------------------------
 将以前台方式启动 Aztec 节点（当前终端）：
