@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# 先提示输入 -> 再安装/运行 的 Aztec CLI 一键脚本（前台运行）
-# - 强制从 /dev/tty 读输入，确保总能看到提示并交互
-# - 自动将登录用户加入 docker 组，并以 -g docker 运行需要用到 docker 的命令
+# 先提示输入 -> 安装/配置 -> 生成本地一键启动文件 ~/aztec/start_aztec_cli.sh -> 前台运行
 # 用法：sudo -E ./aztec_cli_run.sh
 
-# --- 确保用 bash 运行 ---
+# --- 确保用 bash ---
 if [ -z "${BASH_VERSION:-}" ]; then exec /usr/bin/env bash "$0" "$@"; fi
 set -Eeuo pipefail
 umask 022
@@ -15,21 +13,20 @@ export NEEDRESTART_MODE=a
 [[ $EUID -eq 0 ]] || { echo "请用 sudo 运行：sudo -E $0"; exit 1; }
 TARGET_USER="${SUDO_USER:-root}"
 TARGET_HOME="$(eval echo "~$TARGET_USER")"
+RUN_DIR="$TARGET_HOME/aztec"
+mkdir -p "$RUN_DIR"
 TARGET_BASHRC="$TARGET_HOME/.bashrc"
+
 CONFIG_DIR="/etc/aztec-node"
 CONFIG_FILE="$CONFIG_DIR/config.env"
-LOG_DIR="/var/log/aztec-node"
-mkdir -p "$CONFIG_DIR" "$LOG_DIR"; chmod 700 "$CONFIG_DIR"; touch "$CONFIG_FILE"; chmod 600 "$CONFIG_FILE"
+mkdir -p "$CONFIG_DIR"; chmod 700 "$CONFIG_DIR"; touch "$CONFIG_FILE"; chmod 600 "$CONFIG_FILE"
 
 # ===== 彩色输出 =====
 c(){ printf "\033[%sm%s\033[0m\n" "$1" "$2"; }
 info(){ c "1;34" "ℹ️  $*"; }; ok(){ c "1;32" "✓ $*"; }; warn(){ c "1;33" "⚠️  $*"; }; err(){ c "1;31" "✗ $*"; }
 
-# ===== 若无交互终端，直接报错退出（防止读不到输入）=====
-if [[ ! -t 0 && ! -e /dev/tty ]]; then
-  err "未检测到交互终端，无法读取输入。请在交互式 shell 中运行本脚本。"
-  exit 100
-fi
+# ===== 交互终端检查（保证能读输入）=====
+if [[ ! -t 0 && ! -e /dev/tty ]]; then err "未检测到交互终端，无法读取输入。"; exit 100; fi
 
 # ===== 读入旧配置（如有）=====
 # shellcheck disable=SC1090
@@ -41,7 +38,7 @@ is_privkey(){ [[ "${1:-}" =~ ^0x[0-9a-fA-F]{64}$ ]]; }
 is_ethaddr(){ [[ "${1:-}" =~ ^0x[0-9a-fA-F]{40}$ ]]; }
 is_ipv4(){ [[ "${1:-}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
 
-# ===== 安全输入（从 /dev/tty 读取；支持默认/保密/最多重试）=====
+# ===== 安全输入（从 /dev/tty 读取）=====
 ASK_TRIES=5
 ask_url(){
   local var="$1" prompt="$2" curr input
@@ -52,8 +49,7 @@ ask_url(){
     [[ -z "$input" ]] && input="$curr"
     if is_url "$input"; then printf -v "$var" '%s' "$input"; return 0; fi
     err "URL 无效（需 http:// 或 https://）($i/$ASK_TRIES)"
-  done
-  err "多次失败，退出。"; exit 10
+  done; exit 10
 }
 ask_secret(){
   local var="$1" prompt="$2" validator="$3" curr input
@@ -69,8 +65,7 @@ ask_secret(){
     fi
     if "$validator" "$input"; then printf -v "$var" '%s' "$input"; return 0; fi
     err "格式不正确 ($i/$ASK_TRIES)"
-  done
-  err "多次失败，退出。"; exit 11
+  done; exit 11
 }
 ask_plain(){
   local var="$1" prompt="$2" validator="$3" curr input
@@ -81,11 +76,10 @@ ask_plain(){
     [[ -z "$input" ]] && input="$curr"
     if "$validator" "$input"; then printf -v "$var" '%s' "$input"; return 0; fi
     err "格式不正确 ($i/$ASK_TRIES)"
-  done
-  err "多次失败，退出。"; exit 12
+  done; exit 12
 }
 
-# ===== 公网 IP 侦测（可为空）=====
+# ===== 公网 IP 探测 =====
 PUB_IP="${PUB_IP:-$(curl -4 -fsS icanhazip.com || curl -4 -fsS ifconfig.co || true)}"
 [[ -n "${PUB_IP:-}" ]] && ok "检测到公网 IPv4：$PUB_IP" || warn "未能自动获取公网 IPv4。"
 
@@ -98,26 +92,24 @@ ask_plain COINBASE "COINBASE 地址（0x+40hex）" is_ethaddr
 # P2P_IP 可选
 printf "%s" "P2P 对外 IPv4（可回车自动使用检测值 ${PUB_IP:-<无>}）: " >/dev/tty
 P2P_IN=""; IFS= read -r P2P_IN </dev/tty || true
-if [[ -z "$P2P_IN" ]]; then
-  P2P_IP="${P2P_IP:-$PUB_IP}"
-else
-  is_ipv4 "$P2P_IN" || { err "IPv4 格式不正确"; exit 13; }
-  P2P_IP="$P2P_IN"
-fi
+if [[ -z "$P2P_IN" ]]; then P2P_IP="${P2P_IP:-$PUB_IP}"; else
+  is_ipv4 "$P2P_IN" || { err "IPv4 格式不正确"; exit 13; }; P2P_IP="$P2P_IN"; fi
 
 # ===== 确认摘要 =====
-echo "----------------------------------" >/dev/tty
-echo "EL RPC: $ETHEREUM_HOSTS" >/dev/tty
-echo "CL RPC: $L1_CONSENSUS_HOST_URLS" >/dev/tty
-echo "COINBASE: $COINBASE" >/dev/tty
-echo "P2P_IP: ${P2P_IP:-<未设置>（可不填）}" >/dev/tty
-echo "私钥: ****${VALIDATOR_PRIVATE_KEY: -6}" >/dev/tty
-echo "----------------------------------" >/dev/tty
-printf "%s" "确认以上信息并继续安装/运行？(y/N): " >/dev/tty
+{
+  echo "----------------------------------"
+  echo "EL RPC: $ETHEREUM_HOSTS"
+  echo "CL RPC: $L1_CONSENSUS_HOST_URLS"
+  echo "COINBASE: $COINBASE"
+  echo "P2P_IP: ${P2P_IP:-<未设置>}"
+  echo "私钥: ****${VALIDATOR_PRIVATE_KEY: -6}"
+  echo "----------------------------------"
+  printf "%s" "确认以上信息并继续安装/运行？(y/N): "
+} >/dev/tty
 _go=""; IFS= read -r _go </dev/tty || true
 [[ "$_go" =~ ^[yY]$ ]] || { warn "已取消。"; exit 0; }
 
-# ===== 保存配置（仅 root 可读）=====
+# ===== 保存配置 =====
 mkdir -p "$CONFIG_DIR"
 cat > "$CONFIG_FILE" <<EOF
 ETHEREUM_HOSTS="$ETHEREUM_HOSTS"
@@ -134,7 +126,7 @@ info "安装通用依赖（curl gnupg lsb-release jq netcat-openbsd ufw）…"
 apt-get update -y -o Acquire::Retries=3
 apt-get install -y ca-certificates curl gnupg lsb-release jq netcat-openbsd ufw
 
-# ===== 安装/配置 Docker（官方源 + keyrings，失败降级到 docker.io）=====
+# ===== 安装/配置 Docker（官方源 + keyrings，失败降级 docker.io）=====
 if ! command -v docker >/dev/null 2>&1; then
   info "安装 Docker（官方源 + keyrings）…"
   rm -f /etc/apt/keyrings/docker.gpg || true
@@ -159,11 +151,9 @@ else
 fi
 
 # ===== 将登录用户加入 docker 组（永久权限）=====
-if ! getent group docker >/dev/null 2>&1; then
-  groupadd docker
-fi
+if ! getent group docker >/dev/null 2>&1; then groupadd docker; fi
 if [[ -n "${SUDO_USER:-}" ]]; then
-  if ! id -nG "$SUDO_USER" | tr ' ' '\n' | grep -qx docker; then
+  if ! id -nG "$SUDO_USER" | tr " " "\n" | grep -qx docker; then
     info "将用户 $SUDO_USER 加入 docker 组…"
     usermod -aG docker "$SUDO_USER" || true
     ok "已加入 docker 组（新会话生效）。"
@@ -192,34 +182,72 @@ else
   ok "Aztec CLI 已安装。"
 fi
 
-# ===== 前台运行（以 docker 组身份，Ctrl+C 停止）=====
+# ===== 生成本地一键启动文件：~/aztec/start_aztec_cli.sh =====
+cat > "$RUN_DIR/start_aztec_cli.sh" <<'EOS'
+#!/usr/bin/env bash
+# 本地一键启动（前台运行，Ctrl+C 停止）
+set -Eeuo pipefail
+CONFIG_FILE="/etc/aztec-node/config.env"
+if [[ ! -f "$CONFIG_FILE" ]]; then echo "[ERROR] 缺少配置：$CONFIG_FILE"; exit 1; fi
+set +u; source "$CONFIG_FILE"; set -u
+
+# 找 aztec 可执行
+if command -v aztec >/dev/null 2>&1; then AZTEC_BIN="$(command -v aztec)";
+elif [[ -x "$HOME/.aztec/bin/aztec" ]]; then AZTEC_BIN="$HOME/.aztec/bin/aztec";
+else echo "[ERROR] aztec 未找到，请先安装 Aztec CLI。"; exit 1; fi
+
+# P2P IP 自动兜底
+P2P="${P2P_IP:-$(curl -4 -fsS icanhazip.com || true)}"
+
+# 构造命令
+CMD=( "$AZTEC_BIN" start --node --archiver --sequencer
+  --network testnet
+  --l1-rpc-urls "$ETHEREUM_HOSTS"
+  --l1-consensus-host-urls "$L1_CONSENSUS_HOST_URLS"
+  --sequencer.validatorPrivateKey "$VALIDATOR_PRIVATE_KEY"
+  --sequencer.coinbase "$COINBASE"
+)
+[[ -n "${P2P:-}" ]] && CMD+=(--p2p.p2pIp "$P2P")
+
+echo "▶ 正在前台启动 Aztec（Ctrl+C 停止）…"
+echo "   EL: $ETHEREUM_HOSTS"
+echo "   CL: $L1_CONSENSUS_HOST_URLS"
+echo "   P2P_IP: ${P2P:-<未设置>}"
+echo
+
+# 永远以 docker 组身份运行，避免权限问题
+exec sudo -E -u "${SUDO_USER:-$USER}" -g docker bash -lc '
+  set -Eeuo pipefail
+  source ~/.bashrc >/dev/null 2>&1 || true
+  # 重新载入配置
+  source /etc/aztec-node/config.env
+  if command -v aztec >/dev/null 2>&1; then AZTEC_BIN="$(command -v aztec)";
+  elif [[ -x "$HOME/.aztec/bin/aztec" ]]; then AZTEC_BIN="$HOME/.aztec/bin/aztec";
+  else echo "[ERROR] aztec 未找到"; exit 1; fi
+  P2P="${P2P_IP:-$(curl -4 -fsS icanhazip.com || true)}"
+  CMD=( "$AZTEC_BIN" start --node --archiver --sequencer
+    --network testnet
+    --l1-rpc-urls "$ETHEREUM_HOSTS"
+    --l1-consensus-host-urls "$L1_CONSENSUS_HOST_URLS"
+    --sequencer.validatorPrivateKey "$VALIDATOR_PRIVATE_KEY"
+    --sequencer.coinbase "$COINBASE"
+  )
+  [[ -n "${P2P:-}" ]] && CMD+=(--p2p.p2pIp "$P2P")
+  echo "▶ 启动命令：${CMD[*]}"
+  exec "${CMD[@]}"
+'
+EOS
+chown "$TARGET_USER":"$TARGET_USER" "$RUN_DIR/start_aztec_cli.sh"
+chmod +x "$RUN_DIR/start_aztec_cli.sh"
+ok "已生成一键启动文件：$RUN_DIR/start_aztec_cli.sh"
+
+# ===== 立刻用这个一键文件前台运行 =====
 cat <<'TXT'
 ---------------------------------------------
 将以前台方式启动 Aztec 节点（当前终端）：
 - 停止：Ctrl+C
-- 下次运行将复用 /etc/aztec-node/config.env
+- 下次直接运行：sudo ~/aztec/start_aztec_cli.sh
 ---------------------------------------------
 TXT
 
-export ETHEREUM_HOSTS L1_CONSENSUS_HOST_URLS VALIDATOR_PRIVATE_KEY COINBASE P2P_IP
-exec sudo --preserve-env=ETHEREUM_HOSTS,L1_CONSENSUS_HOST_URLS,VALIDATOR_PRIVATE_KEY,COINBASE,P2P_IP \
-  -u "$TARGET_USER" -g docker bash -lc '
-  set -Eeuo pipefail
-  source ~/.bashrc >/dev/null 2>&1 || true
-  if command -v aztec >/dev/null 2>&1; then AZTEC_BIN="$(command -v aztec)";
-  elif [[ -x "$HOME/.aztec/bin/aztec" ]]; then AZTEC_BIN="$HOME/.aztec/bin/aztec";
-  else echo "[ERROR] aztec 未找到"; exit 1; fi
-
-  CMD=(
-    "$AZTEC_BIN" start --node --archiver --sequencer
-    --network testnet
-    --l1-rpc-urls "$ETHEREUM_HOSTS"
-    --l1-consensus-host-urls "$L1_CONSENSUS_HOST_URLS"
-    --sequencer.validatorPrivateKeys "$VALIDATOR_PRIVATE_KEY"
-    --sequencer.coinbase "$COINBASE"
-  )
-  if [[ -n "${P2P_IP:-}" ]]; then CMD+=(--p2p.p2pIp "$P2P_IP"); fi
-
-  echo "▶ 启动命令：${CMD[*]}"
-  exec "${CMD[@]}"
-'
+exec "$RUN_DIR/start_aztec_cli.sh"
