@@ -215,7 +215,7 @@ exec sudo --preserve-env=ETHEREUM_HOSTS,L1_CONSENSUS_HOST_URLS,VALIDATOR_PRIVATE
     --network testnet
     --l1-rpc-urls "$ETHEREUM_HOSTS"
     --l1-consensus-host-urls "$L1_CONSENSUS_HOST_URLS"
-    --sequencer.validatorPrivateKey "$VALIDATOR_PRIVATE_KEY"
+    --sequencer.validatorPrivateKeys "$VALIDATOR_PRIVATE_KEY"
     --sequencer.coinbase "$COINBASE"
   )
   if [[ -n "${P2P_IP:-}" ]]; then CMD+=(--p2p.p2pIp "$P2P_IP"); fi
