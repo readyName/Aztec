@@ -81,7 +81,7 @@ install_docker() {
     print_info "未找到 Docker，正在安装..."
   fi
   update_apt
-  install_package "apt-transport-https ca-certificates curl gnupg-agent software-properties-common"
+  install_package "curl gnupg lsb-release ca-certificates software-properties-common"
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
   add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
   update_apt
