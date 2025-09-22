@@ -1,253 +1,207 @@
 #!/usr/bin/env bash
-# 先提示输入 -> 安装/配置 -> 生成本地一键启动文件 ~/aztec/start_aztec_cli.sh -> 前台运行
-# 用法：sudo -E ./aztec_cli_run.sh
+set -euo pipefail
 
-# --- 确保用 bash ---
-if [ -z "${BASH_VERSION:-}" ]; then exec /usr/bin/env bash "$0" "$@"; fi
-set -Eeuo pipefail
-umask 022
-export DEBIAN_FRONTEND=noninteractive
-export NEEDRESTART_MODE=a
+# 获取当前用户目录
+USER_NAME=$(whoami)
+AZTEC_DIR="/home/$USER_NAME/aztec"  # 使用当前用户的目录
+DATA_DIR="/home/$USER_NAME/.aztec/alpha-testnet/data"
 
-# ===== 基础路径/权限 =====
-[[ $EUID -eq 0 ]] || { echo "请用 sudo 运行：sudo -E $0"; exit 1; }
-TARGET_USER="${SUDO_USER:-root}"
-TARGET_HOME="$(eval echo "~$TARGET_USER")"
-RUN_DIR="$TARGET_HOME/aztec"
-mkdir -p "$RUN_DIR"
-TARGET_BASHRC="$TARGET_HOME/.bashrc"
+# 检查是否以 root 权限运行
+if [ "$(id -u)" -ne 0 ]; then
+  echo "本脚本必须以 root 权限运行。"
+  exit 1
+fi
 
-CONFIG_DIR="/etc/aztec-node"
-CONFIG_FILE="$CONFIG_DIR/config.env"
-mkdir -p "$CONFIG_DIR"; chmod 700 "$CONFIG_DIR"; touch "$CONFIG_FILE"; chmod 600 "$CONFIG_FILE"
-
-# ===== 彩色输出 =====
-c(){ printf "\033[%sm%s\033[0m\n" "$1" "$2"; }
-info(){ c "1;34" "ℹ️  $*"; }; ok(){ c "1;32" "✓ $*"; }; warn(){ c "1;33" "⚠️  $*"; }; err(){ c "1;31" "✗ $*"; }
-
-# ===== 交互终端检查（保证能读输入）=====
-if [[ ! -t 0 && ! -e /dev/tty ]]; then err "未检测到交互终端，无法读取输入。"; exit 100; fi
-
-# ===== 读入旧配置（如有）=====
-# shellcheck disable=SC1090
-source "$CONFIG_FILE" || true
-
-# ===== 校验函数 =====
-is_url(){ [[ "${1:-}" =~ ^https?:// ]]; }
-is_privkey(){ [[ "${1:-}" =~ ^0x[0-9a-fA-F]{64}$ ]]; }
-is_ethaddr(){ [[ "${1:-}" =~ ^0x[0-9a-fA-F]{40}$ ]]; }
-is_ipv4(){ [[ "${1:-}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
-
-# ===== 安全输入（从 /dev/tty 读取）=====
-ASK_TRIES=5
-ask_url(){
-  local var="$1" prompt="$2" curr input
-  curr="${!var-}"
-  for ((i=1;i<=ASK_TRIES;i++)); do
-    printf "%s" "$prompt${curr:+ [默认: $curr]}: " >/dev/tty
-    IFS= read -r input </dev/tty || true
-    [[ -z "$input" ]] && input="$curr"
-    if is_url "$input"; then printf -v "$var" '%s' "$input"; return 0; fi
-    err "URL 无效（需 http:// 或 https://）($i/$ASK_TRIES)"
-  done; exit 10
+# 函数：打印信息
+print_info() {
+  echo "$1"
 }
-ask_secret(){
-  local var="$1" prompt="$2" validator="$3" curr input
-  curr="${!var-}"
-  for ((i=1;i<=ASK_TRIES;i++)); do
-    if [[ -n "$curr" ]]; then
-      printf "%s" "$prompt [已保存，回车不变]: " >/dev/tty
-      IFS= read -rs input </dev/tty || true; echo >/dev/tty
-      [[ -z "$input" ]] && { printf -v "$var" '%s' "$curr"; return 0; }
+
+# 函数：检查命令是否存在
+check_command() {
+  command -v "$1" &> /dev/null
+}
+
+# 函数：比较版本号
+version_ge() {
+  [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
+}
+
+# 函数：安装依赖
+install_package() {
+  local pkg=$1
+  print_info "安装 $pkg..."
+  apt-get install -y "$pkg"
+}
+
+# 更新 apt 源（只执行一次）
+update_apt() {
+  if [ -z "${APT_UPDATED:-}" ]; then
+    print_info "更新 apt 源..."
+    apt-get update
+    APT_UPDATED=1
+  fi
+}
+
+# 检查并安装 Docker
+install_docker() {
+  if check_command docker; then
+    local version
+    version=$(docker --version | grep -oP '\d+\.\d+\.\d+' || echo "0.0.0")
+    if version_ge "$version" "$MIN_DOCKER_VERSION"; then
+      print_info "Docker 已安装，版本 $version，满足要求（>= $MIN_DOCKER_VERSION）。"
+      return
     else
-      printf "%s" "$prompt: " >/dev/tty
-      IFS= read -rs input </dev/tty || true; echo >/dev/tty
+      print_info "Docker 版本 $version 过低（要求 >= $MIN_DOCKER_VERSION），将重新安装..."
     fi
-    if "$validator" "$input"; then printf -v "$var" '%s' "$input"; return 0; fi
-    err "格式不正确 ($i/$ASK_TRIES)"
-  done; exit 11
-}
-ask_plain(){
-  local var="$1" prompt="$2" validator="$3" curr input
-  curr="${!var-}"
-  for ((i=1;i<=ASK_TRIES;i++)); do
-    printf "%s" "$prompt${curr:+ [默认: $curr]}: " >/dev/tty
-    IFS= read -r input </dev/tty || true
-    [[ -z "$input" ]] && input="$curr"
-    if "$validator" "$input"; then printf -v "$var" '%s' "$input"; return 0; fi
-    err "格式不正确 ($i/$ASK_TRIES)"
-  done; exit 12
+  else
+    print_info "未找到 Docker，正在安装..."
+  fi
+  update_apt
+  install_package "apt-transport-https ca-certificates curl gnupg-agent software-properties-common"
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
+  add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+  update_apt
+  install_package "docker-ce docker-ce-cli containerd.io"
 }
 
-# ===== 公网 IP 探测 =====
-PUB_IP="${PUB_IP:-$(curl -4 -fsS icanhazip.com || curl -4 -fsS ifconfig.co || true)}"
-[[ -n "${PUB_IP:-}" ]] && ok "检测到公网 IPv4：$PUB_IP" || warn "未能自动获取公网 IPv4。"
+# 检查并安装 Docker Compose
+install_docker_compose() {
+  if check_command docker-compose || docker compose version &> /dev/null; then
+    local version
+    version=$(docker-compose --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' || docker compose version | grep -oP '\d+\.\d+\.\d+' || echo "0.0.0")
+    if version_ge "$version" "$MIN_COMPOSE_VERSION"; then
+      print_info "Docker Compose 已安装，版本 $version，满足要求（>= $MIN_COMPOSE_VERSION）。"
+      return
+    else
+      print_info "Docker Compose 版本 $version 过低（要求 >= $MIN_COMPOSE_VERSION），将重新安装..."
+    fi
+  else
+    print_info "未找到 Docker Compose，正在安装..."
+  fi
+  update_apt
+  install_package docker-compose-plugin
+}
 
-# ===== 先提示输入（再执行安装/运行）=====
-info "请输入运行所需变量（回车可沿用历史值，最多重试 $ASK_TRIES 次）："
-ask_url ETHEREUM_HOSTS "EL RPC URL（执行层，示例：https://eth-sepolia.g.alchemy.com/v2/xxxx）"
-ask_url L1_CONSENSUS_HOST_URLS "CL RPC URL（Beacon 共识层，示例：https://.../beacon）"
-ask_secret VALIDATOR_PRIVATE_KEY "验证者私钥（0x+64hex）" is_privkey
-ask_plain COINBASE "COINBASE 地址（0x+40hex）" is_ethaddr
-# P2P_IP 可选
-printf "%s" "P2P 对外 IPv4（可回车自动使用检测值 ${PUB_IP:-<无>}）: " >/dev/tty
-P2P_IN=""; IFS= read -r P2P_IN </dev/tty || true
-if [[ -z "$P2P_IN" ]]; then P2P_IP="${P2P_IP:-$PUB_IP}"; else
-  is_ipv4 "$P2P_IN" || { err "IPv4 格式不正确"; exit 13; }; P2P_IP="$P2P_IN"; fi
+# 检查并安装 Node.js
+install_nodejs() {
+  if check_command node; then
+    print_info "Node.js 已安装。"
+    return
+  fi
+  print_info "未找到 Node.js，正在安装最新版本..."
+  curl -fsSL https://deb.nodesource.com/setup_current.x | bash -
+  update_apt
+  install_package nodejs
+}
 
-# ===== 确认摘要 =====
-{
-  echo "----------------------------------"
-  echo "EL RPC: $ETHEREUM_HOSTS"
-  echo "CL RPC: $L1_CONSENSUS_HOST_URLS"
-  echo "COINBASE: $COINBASE"
-  echo "P2P_IP: ${P2P_IP:-<未设置>}"
-  echo "私钥: ****${VALIDATOR_PRIVATE_KEY: -6}"
-  echo "----------------------------------"
-  printf "%s" "确认以上信息并继续安装/运行？(y/N): "
-} >/dev/tty
-_go=""; IFS= read -r _go </dev/tty || true
-[[ "$_go" =~ ^[yY]$ ]] || { warn "已取消。"; exit 0; }
+# 安装 Aztec CLI
+install_aztec_cli() {
+  print_info "安装 Aztec CLI 并准备 alpha 测试网..."
+  if ! curl -sL "$AZTEC_CLI_URL" | bash; then
+    echo "Aztec CLI 安装失败。"
+    exit 1
+  fi
+  export PATH="$HOME/.aztec/bin:$PATH"
+  if ! check_command aztec-up; then
+    echo "Aztec CLI 安装失败，未找到 aztec-up 命令。"
+    exit 1
+  fi
+  aztec-up alpha-testnet
+}
 
-# ===== 保存配置 =====
-mkdir -p "$CONFIG_DIR"
-cat > "$CONFIG_FILE" <<EOF
-ETHEREUM_HOSTS="$ETHEREUM_HOSTS"
-L1_CONSENSUS_HOST_URLS="$L1_CONSENSUS_HOST_URLS"
+# 验证 RPC URL 格式（检查是否以 http:// 或 https:// 开头）
+validate_url() {
+  local url=$1
+  local name=$2
+  if [[ ! "$url" =~ ^https?:// ]]; then
+    echo "错误：$name 格式无效，必须以 http:// 或 https:// 开头。"
+    exit 1
+  fi
+}
+
+# 验证以太坊地址格式
+validate_address() {
+  local address=$1
+  local name=$2
+  if [[ ! "$address" =~ ^0x[a-fA-F0-9]{40}$ ]]; then
+    echo "错误：$name 格式无效，必须是有效的以太坊地址（0x 开头的 40 位十六进制）。"
+    exit 1
+  fi
+}
+
+# 主逻辑：安装和启动 Aztec 节点
+install_and_start_node() {
+  # 清理旧配置
+  print_info "清理旧的 Aztec 配置（如果存在）..."
+  rm -rf "$AZTEC_DIR/.env" "$AZTEC_DIR/aztec_start.sh"
+  docker stop aztec-sequencer 2>/dev/null || true
+  docker rm aztec-sequencer 2>/dev/null || true
+
+  # 安装依赖
+  install_docker
+  install_docker_compose
+  install_nodejs
+  install_aztec_cli
+
+  # 创建 Aztec 配置目录
+  print_info "创建 Aztec 配置目录 $AZTEC_DIR..."
+  mkdir -p "$AZTEC_DIR"
+  chmod -R 755 "$AZTEC_DIR"
+
+  # 获取用户输入
+  print_info "获取 RPC URL 和其他配置的说明："
+  read -p " L1 执行客户端（EL）RPC URL： " ETH_RPC
+  read -p " L1 共识（CL）RPC URL： " CONS_RPC
+  read -p " 验证者私钥（0x 开头的 64 位十六进制）： " VALIDATOR_PRIVATE_KEY
+  read -p " EVM钱包 地址（以太坊地址，0x 开头）： " COINBASE
+
+  # 验证输入
+  validate_url "$ETH_RPC" "L1 执行客户端（EL）RPC URL"
+  validate_url "$CONS_RPC" "L1 共识（CL）RPC URL"
+  if [ -z "$VALIDATOR_PRIVATE_KEY" ]; then
+    echo "错误：验证者私钥不能为空。"
+    exit 1
+  fi
+  validate_address "$COINBASE" "COINBASE 地址"
+
+  # 获取公共 IP
+  print_info "获取公共 IP..."
+  PUBLIC_IP=$(curl -s ifconfig.me || echo "127.0.0.1")
+  print_info "    → $PUBLIC_IP"
+
+  # 生成 .env 文件
+  print_info "生成 $AZTEC_DIR/.env 文件..."
+  cat > "$AZTEC_DIR/.env" <<EOF
+ETHEREUM_HOSTS="$ETH_RPC"
+L1_CONSENSUS_HOST_URLS="$CONS_RPC"
+P2P_IP="$PUBLIC_IP"
 VALIDATOR_PRIVATE_KEY="$VALIDATOR_PRIVATE_KEY"
 COINBASE="$COINBASE"
-P2P_IP="${P2P_IP-}"
+DATA_DIRECTORY="/data"
+LOG_LEVEL="debug"
 EOF
-chmod 600 "$CONFIG_FILE"
-ok "配置已保存：$CONFIG_FILE"
+  chmod 600 "$AZTEC_DIR/.env"
 
-# ===== 基础依赖 =====
-info "安装通用依赖（curl gnupg lsb-release jq netcat-openbsd ufw）…"
-apt-get update -y -o Acquire::Retries=3
-apt-get install -y ca-certificates curl gnupg lsb-release jq netcat-openbsd ufw
+  # 生成启动脚本
+  print_info "生成启动脚本 aztec_start.sh..."
+  cat > "$AZTEC_DIR/aztec_start.sh" <<EOF
+#!/bin/bash
+source "$AZTEC_DIR/.env"
+aztec start --node --archiver --sequencer \
+  --network testnet \
+  --l1-rpc-urls \$ETHEREUM_HOSTS  \
+  --l1-consensus-host-urls \$L1_CONSENSUS_HOST_URLS \
+  --sequencer.validatorPrivateKey \$VALIDATOR_PRIVATE_KEY \
+  --sequencer.coinbase \$COINBASE \
+  --p2p.p2pIp \$P2P_IP
+EOF
+  chmod +x "$AZTEC_DIR/aztec_start.sh"
 
-# ===== 安装/配置 Docker（官方源 + keyrings，失败降级 docker.io）=====
-if ! command -v docker >/dev/null 2>&1; then
-  info "安装 Docker（官方源 + keyrings）…"
-  rm -f /etc/apt/keyrings/docker.gpg || true
-  install -m 0755 -d /etc/apt/keyrings
-  curl -fsSL --retry 5 --retry-delay 2 --connect-timeout 20 --ipv4 \
-    https://download.docker.com/linux/ubuntu/gpg -o /tmp/docker.gpg
-  gpg --dearmor -o /etc/apt/keyrings/docker.gpg /tmp/docker.gpg
-  chmod a+r /etc/apt/keyrings/docker.gpg
-  . /etc/os-release
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
-    > /etc/apt/sources.list.d/docker.list
-  apt-get update -y || true
-  if ! apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; then
-    warn "官方仓库安装失败，回退系统仓库：docker.io"
-    apt-get install -y docker.io docker-compose-plugin
-  fi
-  systemctl enable --now docker
-  ok "Docker 安装完成。"
-else
-  ok "Docker 已安装：$(docker --version | head -n1)"
-  systemctl enable --now docker
-fi
+  # 启动节点
+  print_info "启动 Aztec 节点..."
+  "$AZTEC_DIR/aztec_start.sh"
+}
 
-# ===== 将登录用户加入 docker 组（永久权限）=====
-if ! getent group docker >/dev/null 2>&1; then groupadd docker; fi
-if [[ -n "${SUDO_USER:-}" ]]; then
-  if ! id -nG "$SUDO_USER" | tr " " "\n" | grep -qx docker; then
-    info "将用户 $SUDO_USER 加入 docker 组…"
-    usermod -aG docker "$SUDO_USER" || true
-    ok "已加入 docker 组（新会话生效）。"
-  fi
-fi
-
-# ===== UFW =====
-info "配置 UFW（22 / 40400 TCP+UDP / 8080）…"
-ufw allow 22 || true; ufw allow 40400/tcp || true; ufw allow 40400/udp || true; ufw allow 8080/tcp || true
-yes | ufw enable >/dev/null 2>&1 || true
-ok "UFW 就绪。"
-
-# ===== Aztec CLI =====
-ensure_path_line='export PATH="$HOME/.aztec/bin:$PATH"'
-aztec_exists(){ sudo -u "$TARGET_USER" bash -lc 'command -v aztec >/dev/null 2>&1 || [[ -x "$HOME/.aztec/bin/aztec" ]]'; }
-if ! aztec_exists; then
-  info "安装 Aztec CLI…（以 docker 组身份运行安装器）"
-  sudo -u "$TARGET_USER" -g docker bash -lc 'bash -i <(curl -s https://install.aztec.network)'
-  if ! sudo -u "$TARGET_USER" bash -lc "grep -Fq '$ensure_path_line' '$TARGET_BASHRC' 2>/dev/null"; then
-    echo "$ensure_path_line" >> "$TARGET_BASHRC"; chown "$TARGET_USER":"$TARGET_USER" "$TARGET_BASHRC"
-  fi
-  sudo -u "$TARGET_USER" bash -lc 'source ~/.bashrc >/dev/null 2>&1; command -v aztec >/dev/null 2>&1' \
-    || { err "Aztec CLI 安装失败"; exit 3; }
-  ok "Aztec CLI 安装完成。"
-else
-  ok "Aztec CLI 已安装。"
-fi
-
-# ===== 生成本地一键启动文件：~/aztec/start_aztec_cli.sh =====
-cat > "$RUN_DIR/start_aztec_cli.sh" <<'EOS'
-#!/usr/bin/env bash
-# 本地一键启动（前台运行，Ctrl+C 停止）
-set -Eeuo pipefail
-CONFIG_FILE="/etc/aztec-node/config.env"
-if [[ ! -f "$CONFIG_FILE" ]]; then echo "[ERROR] 缺少配置：$CONFIG_FILE"; exit 1; fi
-set +u; source "$CONFIG_FILE"; set -u
-
-# 找 aztec 可执行
-if command -v aztec >/dev/null 2>&1; then AZTEC_BIN="$(command -v aztec)";
-elif [[ -x "$HOME/.aztec/bin/aztec" ]]; then AZTEC_BIN="$HOME/.aztec/bin/aztec";
-else echo "[ERROR] aztec 未找到，请先安装 Aztec CLI。"; exit 1; fi
-
-# P2P IP 自动兜底
-P2P="${P2P_IP:-$(curl -4 -fsS icanhazip.com || true)}"
-
-# 构造命令
-CMD=( "$AZTEC_BIN" start --node --archiver --sequencer
-  --network testnet
-  --l1-rpc-urls "$ETHEREUM_HOSTS"
-  --l1-consensus-host-urls "$L1_CONSENSUS_HOST_URLS"
-  --sequencer.validatorPrivateKey "$VALIDATOR_PRIVATE_KEY"
-  --sequencer.coinbase "$COINBASE"
-)
-[[ -n "${P2P:-}" ]] && CMD+=(--p2p.p2pIp "$P2P")
-
-echo "▶ 正在前台启动 Aztec（Ctrl+C 停止）…"
-echo "   EL: $ETHEREUM_HOSTS"
-echo "   CL: $L1_CONSENSUS_HOST_URLS"
-echo "   P2P_IP: ${P2P:-<未设置>}"
-echo
-
-# 永远以 docker 组身份运行，避免权限问题
-exec sudo -E -u "${SUDO_USER:-$USER}" -g docker bash -lc '
-  set -Eeuo pipefail
-  source ~/.bashrc >/dev/null 2>&1 || true
-  # 重新载入配置
-  source /etc/aztec-node/config.env
-  if command -v aztec >/dev/null 2>&1; then AZTEC_BIN="$(command -v aztec)";
-  elif [[ -x "$HOME/.aztec/bin/aztec" ]]; then AZTEC_BIN="$HOME/.aztec/bin/aztec";
-  else echo "[ERROR] aztec 未找到"; exit 1; fi
-  P2P="${P2P_IP:-$(curl -4 -fsS icanhazip.com || true)}"
-  CMD=( "$AZTEC_BIN" start --node --archiver --sequencer
-    --network testnet
-    --l1-rpc-urls "$ETHEREUM_HOSTS"
-    --l1-consensus-host-urls "$L1_CONSENSUS_HOST_URLS"
-    --sequencer.validatorPrivateKey "$VALIDATOR_PRIVATE_KEY"
-    --sequencer.coinbase "$COINBASE"
-  )
-  [[ -n "${P2P:-}" ]] && CMD+=(--p2p.p2pIp "$P2P")
-  echo "▶ 启动命令：${CMD[*]}"
-  exec "${CMD[@]}"
-'
-EOS
-chown "$TARGET_USER":"$TARGET_USER" "$RUN_DIR/start_aztec_cli.sh"
-chmod +x "$RUN_DIR/start_aztec_cli.sh"
-ok "已生成一键启动文件：$RUN_DIR/start_aztec_cli.sh"
-
-# ===== 立刻用这个一键文件前台运行 =====
-cat <<'TXT'
----------------------------------------------
-将以前台方式启动 Aztec 节点（当前终端）：
-- 停止：Ctrl+C
-- 下次直接运行：sudo ~/aztec/start_aztec_cli.sh
----------------------------------------------
-TXT
-
-exec "$RUN_DIR/start_aztec_cli.sh"
+# 执行主逻辑
+install_and_start_node
