@@ -34,12 +34,35 @@ install_package() {
   apt-get install -y "$pkg"
 }
 
-# 更新 apt 源（只执行一次）
+# 更新 apt 源（确保源更新）
 update_apt() {
   if [ -z "${APT_UPDATED:-}" ]; then
     print_info "更新 apt 源..."
     apt-get update
     APT_UPDATED=1
+  fi
+}
+
+# 确保 apt 源配置正确
+update_sources_list() {
+  print_info "检查并更新 apt 源..."
+  
+  # 如果是 Ubuntu 20.04 (Focal)，使用默认源
+  if grep -q "Ubuntu 20.04" /etc/os-release; then
+    if ! grep -q "archive.ubuntu.com" /etc/apt/sources.list; then
+      echo "deb http://archive.ubuntu.com/ubuntu/ focal main restricted universe multiverse" | tee -a /etc/apt/sources.list
+      echo "deb http://archive.ubuntu.com/ubuntu/ focal-updates main restricted universe multiverse" | tee -a /etc/apt/sources.list
+      echo "deb http://archive.ubuntu.com/ubuntu/ focal-security main restricted universe multiverse" | tee -a /etc/apt/sources.list
+    fi
+  # 如果是 Ubuntu 22.04 (Jammy)，使用默认源
+  elif grep -q "Ubuntu 22.04" /etc/os-release; then
+    if ! grep -q "archive.ubuntu.com" /etc/apt/sources.list; then
+      echo "deb http://archive.ubuntu.com/ubuntu/ jammy main restricted universe multiverse" | tee -a /etc/apt/sources.list
+      echo "deb http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted universe multiverse" | tee -a /etc/apt/sources.list
+      echo "deb http://archive.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse" | tee -a /etc/apt/sources.list
+    fi
+  else
+    echo "未识别的 Ubuntu 版本，自动更新源可能失败。请手动检查并更新源配置。"
   fi
 }
 
