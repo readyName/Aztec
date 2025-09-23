@@ -1,7 +1,7 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
-# 获取当前用户名
+# 获取当前用户目录
 USER_NAME=$(whoami)
 AZTEC_DIR="/home/$USER_NAME/aztec"  # 使用当前用户的目录
 DATA_DIR="/home/$USER_NAME/.aztec/alpha-testnet/data"
@@ -22,6 +22,11 @@ check_command() {
   command -v "$1" &> /dev/null
 }
 
+# 函数：比较版本号
+version_ge() {
+  [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
+}
+
 # 函数：安装包
 install_package() {
   local pkg=$1
@@ -38,10 +43,12 @@ update_apt() {
   fi
 }
 
-# 安装依赖
+# 安装依赖：curl、iptables、build-essential等
 install_dependencies() {
   print_info "安装 curl iptables build-essential git wget lz4 jq make gcc nano automake autoconf tmux htop nvme-cli libgbm1 pkg-config libssl-dev libleveldb-dev tar clang bsdmainutils ncdu unzip..."
-  install_package "curl iptables build-essential git wget lz4 jq make gcc nano automake autoconf tmux htop nvme-cli libgbm1 pkg-config libssl-dev libleveldb-dev tar clang bsdmainutils ncdu unzip"
+  sudo sh -c 'echo "• Root Access Enabled ✔"'
+  sudo apt-get update && sudo apt-get upgrade -y
+  sudo apt install curl iptables build-essential git wget lz4 jq make gcc nano automake autoconf tmux htop nvme-cli libgbm1 pkg-config libssl-dev libleveldb-dev tar clang bsdmainutils ncdu unzip libleveldb-dev ufw screen gawk -y
 }
 
 # 安装 Docker 和 Docker Compose
@@ -82,6 +89,26 @@ install_aztec_cli() {
   echo "y" | bash -i <(curl -s https://install.aztec.network)  # 自动输入 y 确认安装
   echo 'export PATH="$HOME/.aztec/bin:$PATH"' >> ~/.bashrc
   source ~/.bashrc
+}
+
+# 验证 RPC URL 格式（检查是否以 http:// 或 https:// 开头）
+validate_url() {
+  local url=$1
+  local name=$2
+  if [[ ! "$url" =~ ^https?:// ]]; then
+    echo "错误：$name 格式无效，必须以 http:// 或 https:// 开头。"
+    exit 1
+  fi
+}
+
+# 验证以太坊地址格式
+validate_address() {
+  local address=$1
+  local name=$2
+  if [[ ! "$address" =~ ^0x[a-fA-F0-9]{40}$ ]]; then
+    echo "错误：$name 格式无效，必须是有效的以太坊地址（0x 开头的 40 位十六进制）。"
+    exit 1
+  fi
 }
 
 # 主逻辑：安装和启动 Aztec 节点
