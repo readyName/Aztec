@@ -89,8 +89,73 @@ source ~/.bashrc
 
 echo "安装完成！"
 
-# 创建 Aztec 启动脚本并赋予执行权限
-echo "正在生成 Aztec 启动脚本..."
+# 创建 Aztec 配置目录
+print_info "创建 Aztec 配置目录 $AZTEC_DIR..."
+mkdir -p "$AZTEC_DIR"
+chmod -R 755 "$AZTEC_DIR"
+
+# 配置防火墙
+print_info "配置防火墙，开放端口 40400 和 8080..."
+ufw allow 40400/tcp >/dev/null 2>&1
+ufw allow 40400/udp >/dev/null 2>&1
+ufw allow 8080/tcp >/dev/null 2>&1
+print_info "防火墙状态："
+ufw status
+
+# 获取用户输入
+print_info "获取 RPC URL 和其他配置的说明："
+print_info "  - L1 执行客户端（EL）RPC URL："
+print_info "    1. 在 https://dashboard.alchemy.com/ 获取 Sepolia 的 RPC (http://xxx)"
+print_info ""
+print_info "  - L1 共识（CL）RPC URL："
+print_info "    1. 在 https://drpc.org/ 获取 Beacon Chain Sepolia 的 RPC (http://xxx)"
+print_info ""
+print_info "  - COINBASE：接收奖励的以太坊地址（格式：0x...）"
+print_info ""
+read -p " L1 执行客户端（EL）RPC URL： " ETH_RPC
+read -p " L1 共识（CL）RPC URL： " CONS_RPC
+read -p " 验证者私钥（0x 开头的 64 位十六进制）： " VALIDATOR_PRIVATE_KEY
+read -p " EVM钱包 地址（以太坊地址，0x 开头）： " COINBASE
+BLOB_URL="" # 默认跳过 Blob Sink URL
+
+# 验证输入
+validate_url "$ETH_RPC" "L1 执行客户端（EL）RPC URL"
+validate_url "$CONS_RPC" "L1 共识（CL）RPC URL"
+if [ -z "$VALIDATOR_PRIVATE_KEY" ]; then
+  echo "错误：验证者私钥不能为空。"
+  exit 1
+fi
+validate_address "$COINBASE" "COINBASE 地址"
+
+# 获取公共 IP
+print_info "获取公共 IP..."
+PUBLIC_IP=$(curl -s ifconfig.me || echo "127.0.0.1")
+print_info "    → $PUBLIC_IP"
+
+# 生成 .env 文件
+print_info "生成 $AZTEC_DIR/.env 文件..."
+cat > "$AZTEC_DIR/.env" <<EOF
+ETHEREUM_HOSTS="$ETH_RPC"
+L1_CONSENSUS_HOST_URLS="$CONS_RPC"
+P2P_IP="$PUBLIC_IP"
+VALIDATOR_PRIVATE_KEY="$VALIDATOR_PRIVATE_KEY"
+COINBASE="$COINBASE"
+DATA_DIRECTORY="/data"
+LOG_LEVEL="debug"
+EOF
+if [ -n "$BLOB_URL" ]; then
+  echo "BLOB_SINK_URL=\"$BLOB_URL\"" >> "$AZTEC_DIR/.env"
+fi
+chmod 600 "$AZTEC_DIR/.env"
+
+# 设置 BLOB_FLAG
+BLOB_FLAG=""
+if [ -n "$BLOB_URL" ]; then
+  BLOB_FLAG="--sequencer.blobSinkUrl \$BLOB_SINK_URL"
+fi
+
+# 生成 aztec_start.sh 启动脚本
+print_info "生成 $AZTEC_DIR/aztec_start.sh 文件..."
 cat > "$AZTEC_DIR/aztec_start.sh" <<EOF
 #!/bin/bash
 source "$AZTEC_DIR/.env"
@@ -105,8 +170,8 @@ EOF
 
 chmod +x "$AZTEC_DIR/aztec_start.sh"
 
-# 提示：用户可以运行以下命令来启动 Aztec 节点
-echo "可以使用以下命令来启动 Aztec 节点："
-echo "$AZTEC_DIR/aztec_start.sh"
+# 启动 Aztec 节点
+print_info "启动 Aztec 节点..."
+"$AZTEC_DIR/aztec_start.sh"
 
-echo "安装完成！"
+echo "安装并启动 Aztec 节点完成！"
