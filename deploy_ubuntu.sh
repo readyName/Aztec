@@ -6,7 +6,7 @@ TARGET_USER="${SUDO_USER:-$USER}"
 HOME_DIR="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 [ -z "$HOME_DIR" ] && HOME_DIR="$HOME"
 AZTEC_DIR="$HOME_DIR/aztec"                 # 配置目录
-DATA_DIR="$HOME_DIR/.aztec/testnet/data"    # CLI使用 testnet
+DATA_DIR="$HOME_DIR/.aztec/testnet/data"    # CLI 使用 testnet
 
 # 检查是否为 Ubuntu 或 Debian 系统
 if [ ! -f /etc/os-release ]; then
@@ -57,21 +57,11 @@ echo "正在安装 Docker..."
 sudo apt update -y && sudo apt upgrade -y
 sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-# 测试 Docker 是否安装成功
-echo "正在测试 Docker 安装..."
-if sudo docker run hello-world; then
-  sudo docker rm $(sudo docker ps -a --filter "ancestor=hello-world" --format "{{.ID}}") --force 2>/dev/null || true
-  sudo docker image rm hello-world 2>/dev/null || true
-  sudo systemctl enable docker
-  sudo systemctl restart docker
-  clear
-  echo -e "\u2022 Docker 已安装成功 ✅"
-fi
-
-# ===== 修复：给“真实用户”加 docker 权限，并立刻可用（无需 exit）=====
+# ===== 先加组 + 让当前会话“立刻可用”，再去运行 hello-world =====
 echo "正在把用户 $TARGET_USER 加入 docker 组..."
 sudo groupadd -f docker
 sudo usermod -aG docker "$TARGET_USER"
+sudo systemctl enable docker >/dev/null 2>&1 || true
 sudo systemctl restart docker
 
 # 尝试立刻在 docker 组上下文中使用 docker；不行则给临时 ACL 以便继续脚本
@@ -81,6 +71,10 @@ if ! sudo -H -u "$TARGET_USER" sg docker -c 'docker ps >/dev/null 2>&1'; then
   sudo apt-get install -y acl >/dev/null 2>&1 || true
   sudo setfacl -m "u:${TARGET_USER}:rw" /var/run/docker.sock || true
 fi
+
+# 测试 Docker（以目标用户 + docker 组上下文）
+echo "正在测试 Docker 安装（拉取/运行 hello-world）..."
+sudo -H -u "$TARGET_USER" sg docker -c 'docker run --rm hello-world' && echo -e "\u2022 Docker 已安装成功 ✅"
 
 # ===== 以目标用户身份安装 Aztec CLI（安装到该用户 HOME）=====
 echo "正在安装 Aztec CLI（用户：$TARGET_USER）..."
@@ -93,8 +87,6 @@ sudo -H -u "$TARGET_USER" bash -lc '
   command -v aztec >/dev/null && aztec -V || { echo "Aztec CLI 未就绪"; exit 1; }
 '
 echo "Aztec CLI 安装完成！"
-
-# ===== 环境变量已写入目标用户的 ~/.bashrc（上面已处理）=====
 
 echo "安装完成！"
 
