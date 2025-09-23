@@ -124,15 +124,6 @@ read -p " 验证者私钥（0x 开头的 64 位十六进制）： " VALIDATOR_PR
 read -p " EVM钱包 地址（以太坊地址，0x 开头）： " COINBASE
 BLOB_URL="" # 默认跳过 Blob Sink URL
 
-# 验证输入
-validate_url "$ETH_RPC" "L1 执行客户端（EL）RPC URL"
-validate_url "$CONS_RPC" "L1 共识（CL）RPC URL"
-if [ -z "$VALIDATOR_PRIVATE_KEY" ]; then
-  echo "错误：验证者私钥不能为空。"
-  exit 1
-fi
-validate_address "$COINBASE" "COINBASE 地址"
-
 # 获取公共 IP
 echo "获取公共 IP..."
 PUBLIC_IP=$(curl -s ifconfig.me || echo "127.0.0.1")
