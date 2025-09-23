@@ -27,22 +27,6 @@ version_ge() {
   [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
 }
 
-# 函数：安装包
-install_package() {
-  local pkg=$1
-  print_info "安装 $pkg..."
-  apt-get install -y "$pkg"
-}
-
-# 更新 apt 源（确保源更新）
-update_apt() {
-  if [ -z "${APT_UPDATED:-}" ]; then
-    print_info "更新 apt 源..."
-    apt-get update
-    APT_UPDATED=1
-  fi
-}
-
 # 安装依赖：curl、iptables、build-essential等
 install_dependencies() {
   print_info "安装 curl iptables build-essential git wget lz4 jq make gcc nano automake autoconf tmux htop nvme-cli libgbm1 pkg-config libssl-dev libleveldb-dev tar clang bsdmainutils ncdu unzip..."
@@ -88,7 +72,6 @@ install_docker() {
     clear
     echo -e "\u2022 Docker Installed \u2714"
   fi
-
 }
 
 # 给用户添加 Docker 权限
@@ -136,6 +119,7 @@ install_and_start_node() {
   # 安装依赖
   install_dependencies
   install_docker
+  add_docker_permissions
   install_aztec_cli
 
   # 创建 Aztec 配置目录
