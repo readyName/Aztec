@@ -69,6 +69,7 @@ install_docker() {
 
 # 给用户添加 Docker 权限
 add_docker_permissions() {
+  print_info "当前用户获取Docker权限..."
   sudo usermod -aG docker $USER
   newgrp docker
 }
@@ -118,8 +119,8 @@ install_and_start_node() {
 
   # 创建 Aztec 配置目录
   print_info "创建 Aztec 配置目录 $AZTEC_DIR..."
-  mkdir -p "$AZTEC_DIR"
-  chmod -R 755 "$AZTEC_DIR"
+  sudo mkdir -p "$AZTEC_DIR"
+  sudo chmod -R 755 "$AZTEC_DIR"
 
   # 获取用户输入
   print_info "获取 RPC URL 和其他配置的说明："
