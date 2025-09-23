@@ -90,28 +90,28 @@ source ~/.bashrc
 echo "安装完成！"
 
 # 创建 Aztec 配置目录
-print_info "创建 Aztec 配置目录 $AZTEC_DIR..."
+echo "创建 Aztec 配置目录 $AZTEC_DIR..."
 mkdir -p "$AZTEC_DIR"
 chmod -R 755 "$AZTEC_DIR"
 
 # 配置防火墙
-print_info "配置防火墙，开放端口 40400 和 8080..."
+echo "配置防火墙，开放端口 40400 和 8080..."
 ufw allow 40400/tcp >/dev/null 2>&1
 ufw allow 40400/udp >/dev/null 2>&1
 ufw allow 8080/tcp >/dev/null 2>&1
-print_info "防火墙状态："
+echo "防火墙状态："
 ufw status
 
 # 获取用户输入
-print_info "获取 RPC URL 和其他配置的说明："
-print_info "  - L1 执行客户端（EL）RPC URL："
-print_info "    1. 在 https://dashboard.alchemy.com/ 获取 Sepolia 的 RPC (http://xxx)"
-print_info ""
-print_info "  - L1 共识（CL）RPC URL："
-print_info "    1. 在 https://drpc.org/ 获取 Beacon Chain Sepolia 的 RPC (http://xxx)"
-print_info ""
-print_info "  - COINBASE：接收奖励的以太坊地址（格式：0x...）"
-print_info ""
+echo "获取 RPC URL 和其他配置的说明："
+echo "  - L1 执行客户端（EL）RPC URL："
+echo "    1. 在 https://dashboard.alchemy.com/ 获取 Sepolia 的 RPC (http://xxx)"
+echo ""
+echo "  - L1 共识（CL）RPC URL："
+echo "    1. 在 https://drpc.org/ 获取 Beacon Chain Sepolia 的 RPC (http://xxx)"
+echo ""
+echo "  - COINBASE：接收奖励的以太坊地址（格式：0x...）"
+echo ""
 read -p " L1 执行客户端（EL）RPC URL： " ETH_RPC
 read -p " L1 共识（CL）RPC URL： " CONS_RPC
 read -p " 验证者私钥（0x 开头的 64 位十六进制）： " VALIDATOR_PRIVATE_KEY
@@ -128,12 +128,12 @@ fi
 validate_address "$COINBASE" "COINBASE 地址"
 
 # 获取公共 IP
-print_info "获取公共 IP..."
+echo "获取公共 IP..."
 PUBLIC_IP=$(curl -s ifconfig.me || echo "127.0.0.1")
-print_info "    → $PUBLIC_IP"
+echo "    → $PUBLIC_IP"
 
 # 生成 .env 文件
-print_info "生成 $AZTEC_DIR/.env 文件..."
+echo "生成 $AZTEC_DIR/.env 文件..."
 cat > "$AZTEC_DIR/.env" <<EOF
 ETHEREUM_HOSTS="$ETH_RPC"
 L1_CONSENSUS_HOST_URLS="$CONS_RPC"
@@ -155,7 +155,7 @@ if [ -n "$BLOB_URL" ]; then
 fi
 
 # 生成 aztec_start.sh 启动脚本
-print_info "生成 $AZTEC_DIR/aztec_start.sh 文件..."
+echo "生成 $AZTEC_DIR/aztec_start.sh 文件..."
 cat > "$AZTEC_DIR/aztec_start.sh" <<EOF
 #!/bin/bash
 source "$AZTEC_DIR/.env"
@@ -171,7 +171,7 @@ EOF
 chmod +x "$AZTEC_DIR/aztec_start.sh"
 
 # 启动 Aztec 节点
-print_info "启动 Aztec 节点..."
+echo "启动 Aztec 节点..."
 "$AZTEC_DIR/aztec_start.sh"
 
 echo "安装并启动 Aztec 节点完成！"
