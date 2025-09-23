@@ -96,7 +96,7 @@ chmod -R 755 "$AZTEC_DIR"
 
 # 配置防火墙
 echo "配置防火墙，开放端口 40400 和 8080..."
-sudo apt install -y ufw > /dev/null 2>&1
+sudo apt install -y ufw
 # Firewall
 sudo ufw allow 22
 sudo ufw allow ssh
