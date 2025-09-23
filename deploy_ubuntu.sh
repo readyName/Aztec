@@ -64,11 +64,11 @@ fi
 # 提示：给当前用户添加 Docker 组权限
 echo "正在给当前用户添加 Docker 权限..."
 sudo usermod -aG docker $USER
-newgrp docker
+exec newgrp docker
 
 # 提示：安装 Aztec CLI
 echo "正在安装 Aztec CLI..."
-bash -i <(curl -s https://install.aztec.network)
+yes y | bash -i <(curl -s https://install.aztec.network)
 
 # 设置环境变量
 echo 'export PATH="$HOME/.aztec/bin:$PATH"' >> ~/.bashrc
