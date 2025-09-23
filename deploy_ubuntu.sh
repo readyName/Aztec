@@ -6,12 +6,6 @@ USER_NAME=$(whoami)
 AZTEC_DIR="/home/$USER_NAME/aztec"  # 使用当前用户的目录
 DATA_DIR="/home/$USER_NAME/.aztec/alpha-testnet/data"
 
-# 检查是否以 root 权限运行
-if [ "$(id -u)" -ne 0 ]; then
-  echo "本脚本必须以 root 权限运行。"
-  exit 1
-fi
-
 # 函数：打印信息
 print_info() {
   echo "$1"
@@ -30,7 +24,6 @@ version_ge() {
 # 安装依赖：curl、iptables、build-essential等
 install_dependencies() {
   print_info "安装 curl iptables build-essential git wget lz4 jq make gcc nano automake autoconf tmux htop nvme-cli libgbm1 pkg-config libssl-dev libleveldb-dev tar clang bsdmainutils ncdu unzip..."
-  sudo sh -c 'echo "• Root Access Enabled ✔"'
   sudo apt-get update && sudo apt-get upgrade -y
   sudo apt install curl iptables build-essential git wget lz4 jq make gcc nano automake autoconf tmux htop nvme-cli libgbm1 pkg-config libssl-dev libleveldb-dev tar clang bsdmainutils ncdu unzip libleveldb-dev ufw screen gawk -y
 }
