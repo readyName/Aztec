@@ -76,7 +76,8 @@ add_docker_permissions() {
 # 安装 Aztec CLI
 install_aztec_cli() {
   print_info "安装 Aztec CLI 并准备 alpha 测试网..."
-  echo "y" | bash -i <(curl -s https://install.aztec.network)  # 自动输入 y 确认安装
+  # 非交互式安装
+  curl -sL https://install.aztec.network | bash
   echo 'export PATH="$HOME/.aztec/bin:$PATH"' >> ~/.bashrc
   source ~/.bashrc
 }
