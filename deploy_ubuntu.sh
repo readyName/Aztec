@@ -64,11 +64,6 @@ fi
 # 提示：给当前用户添加 Docker 组权限
 echo "正在给当前用户添加 Docker 权限..."
 sudo usermod -aG docker $USER
-#!/bin/bash
-
-# 提示：正在安装 Docker 权限
-echo "正在给当前用户添加 Docker 权限..."
-sudo usermod -aG docker $USER
 
 # 立即刷新当前 shell 会话的权限，并继续执行后续操作
 newgrp docker <<EOF
