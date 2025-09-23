@@ -96,11 +96,17 @@ chmod -R 755 "$AZTEC_DIR"
 
 # 配置防火墙
 echo "配置防火墙，开放端口 40400 和 8080..."
-ufw allow 40400/tcp >/dev/null 2>&1
-ufw allow 40400/udp >/dev/null 2>&1
-ufw allow 8080/tcp >/dev/null 2>&1
-echo "防火墙状态："
-ufw status
+sudo apt install -y ufw > /dev/null 2>&1
+# Firewall
+sudo ufw allow 22
+sudo ufw allow ssh
+sudo ufw enable
+# Sequencer
+sudo ufw allow 40400/tcp
+sudo ufw allow 40400/udp
+sudo ufw allow 8080
+sudo ufw reload
+# If asked y/n ..Enter "y"
 
 # 获取用户输入
 echo "获取 RPC URL 和其他配置的说明："
