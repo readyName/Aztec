@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+# 获取当前用户目录
+USER_NAME=$(whoami)
+AZTEC_DIR="/home/$USER_NAME/aztec"  # 使用当前用户的目录
+DATA_DIR="/home/$USER_NAME/.aztec/alpha-testnet/data"
+
 # 检查是否为 Ubuntu 或 Debian 系统
 if [ ! -f /etc/os-release ]; then
   echo "不是 Ubuntu 或 Debian 系统，退出安装。"
@@ -76,11 +81,32 @@ EOF
 
 echo "Aztec CLI 安装完成！"
 
-
 # 设置环境变量
 echo 'export PATH="$HOME/.aztec/bin:$PATH"' >> ~/.bashrc
 
 # 使环境变量生效
 source ~/.bashrc
+
+echo "安装完成！"
+
+# 创建 Aztec 启动脚本并赋予执行权限
+echo "正在生成 Aztec 启动脚本..."
+cat > "$AZTEC_DIR/aztec_start.sh" <<EOF
+#!/bin/bash
+source "$AZTEC_DIR/.env"
+aztec start --node --archiver --sequencer \
+  --network testnet \
+  --l1-rpc-urls \$ETHEREUM_HOSTS  \
+  --l1-consensus-host-urls \$L1_CONSENSUS_HOST_URLS \
+  --sequencer.validatorPrivateKey \$VALIDATOR_PRIVATE_KEY \
+  --sequencer.coinbase \$COINBASE \
+  --p2p.p2pIp \$P2P_IP
+EOF
+
+chmod +x "$AZTEC_DIR/aztec_start.sh"
+
+# 提示：用户可以运行以下命令来启动 Aztec 节点
+echo "可以使用以下命令来启动 Aztec 节点："
+echo "$AZTEC_DIR/aztec_start.sh"
 
 echo "安装完成！"
