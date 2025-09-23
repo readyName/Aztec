@@ -160,7 +160,7 @@ aztec start --node --archiver --sequencer \
   --network testnet \
   --l1-rpc-urls \$ETHEREUM_HOSTS  \
   --l1-consensus-host-urls \$L1_CONSENSUS_HOST_URLS \
-  --sequencer.validatorPrivateKey \$VALIDATOR_PRIVATE_KEY \
+  --sequencer.validatorPrivateKeys \$VALIDATOR_PRIVATE_KEY \
   --sequencer.coinbase \$COINBASE \
   --p2p.p2pIp \$P2P_IP
 EOF
