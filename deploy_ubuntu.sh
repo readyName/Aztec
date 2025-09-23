@@ -1,7 +1,7 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
-# 获取当前用户目录
+# 获取当前用户名
 USER_NAME=$(whoami)
 AZTEC_DIR="/home/$USER_NAME/aztec"  # 使用当前用户的目录
 DATA_DIR="/home/$USER_NAME/.aztec/alpha-testnet/data"
@@ -22,12 +22,7 @@ check_command() {
   command -v "$1" &> /dev/null
 }
 
-# 函数：比较版本号
-version_ge() {
-  [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
-}
-
-# 函数：安装依赖
+# 函数：安装包
 install_package() {
   local pkg=$1
   print_info "安装 $pkg..."
@@ -43,114 +38,50 @@ update_apt() {
   fi
 }
 
-# 确保 apt 源配置正确
-update_sources_list() {
-  print_info "检查并更新 apt 源..."
-  
-  # 如果是 Ubuntu 20.04 (Focal)，使用默认源
-  if grep -q "Ubuntu 20.04" /etc/os-release; then
-    if ! grep -q "archive.ubuntu.com" /etc/apt/sources.list; then
-      echo "deb http://archive.ubuntu.com/ubuntu/ focal main restricted universe multiverse" | tee -a /etc/apt/sources.list
-      echo "deb http://archive.ubuntu.com/ubuntu/ focal-updates main restricted universe multiverse" | tee -a /etc/apt/sources.list
-      echo "deb http://archive.ubuntu.com/ubuntu/ focal-security main restricted universe multiverse" | tee -a /etc/apt/sources.list
-    fi
-  # 如果是 Ubuntu 22.04 (Jammy)，使用默认源
-  elif grep -q "Ubuntu 22.04" /etc/os-release; then
-    if ! grep -q "archive.ubuntu.com" /etc/apt/sources.list; then
-      echo "deb http://archive.ubuntu.com/ubuntu/ jammy main restricted universe multiverse" | tee -a /etc/apt/sources.list
-      echo "deb http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted universe multiverse" | tee -a /etc/apt/sources.list
-      echo "deb http://archive.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse" | tee -a /etc/apt/sources.list
-    fi
-  else
-    echo "未识别的 Ubuntu 版本，自动更新源可能失败。请手动检查并更新源配置。"
-  fi
+# 安装依赖
+install_dependencies() {
+  print_info "安装 curl iptables build-essential git wget lz4 jq make gcc nano automake autoconf tmux htop nvme-cli libgbm1 pkg-config libssl-dev libleveldb-dev tar clang bsdmainutils ncdu unzip..."
+  install_package "curl iptables build-essential git wget lz4 jq make gcc nano automake autoconf tmux htop nvme-cli libgbm1 pkg-config libssl-dev libleveldb-dev tar clang bsdmainutils ncdu unzip"
 }
 
-# 检查并安装 Docker
+# 安装 Docker 和 Docker Compose
 install_docker() {
   if check_command docker; then
     local version
     version=$(docker --version | grep -oP '\d+\.\d+\.\d+' || echo "0.0.0")
-    if version_ge "$version" "$MIN_DOCKER_VERSION"; then
-      print_info "Docker 已安装，版本 $version，满足要求（>= $MIN_DOCKER_VERSION）。"
-      return
-    else
-      print_info "Docker 版本 $version 过低（要求 >= $MIN_DOCKER_VERSION），将重新安装..."
-    fi
+    print_info "Docker 已安装，版本 $version"
   else
     print_info "未找到 Docker，正在安装..."
+    update_apt
+
+    install_package "apt-transport-https ca-certificates curl gnupg lsb-release"
+    sudo install -m 0755 -d /etc/apt/keyrings
+
+    . /etc/os-release
+    repo_url="https://download.docker.com/linux/$ID"
+    curl -fsSL "$repo_url/gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] $repo_url $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+      sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+    sudo apt update -y
+    install_package "docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
   fi
-  update_apt
-  install_package "curl gnupg lsb-release ca-certificates software-properties-common"
-  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
-  add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
-  update_apt
-  install_package "docker-ce docker-ce-cli containerd.io"
 }
 
-# 检查并安装 Docker Compose
-install_docker_compose() {
-  if check_command docker-compose || docker compose version &> /dev/null; then
-    local version
-    version=$(docker-compose --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' || docker compose version | grep -oP '\d+\.\d+\.\d+' || echo "0.0.0")
-    if version_ge "$version" "$MIN_COMPOSE_VERSION"; then
-      print_info "Docker Compose 已安装，版本 $version，满足要求（>= $MIN_COMPOSE_VERSION）。"
-      return
-    else
-      print_info "Docker Compose 版本 $version 过低（要求 >= $MIN_COMPOSE_VERSION），将重新安装..."
-    fi
-  else
-    print_info "未找到 Docker Compose，正在安装..."
-  fi
-  update_apt
-  install_package docker-compose-plugin
-}
-
-# 检查并安装 Node.js
-install_nodejs() {
-  if check_command node; then
-    print_info "Node.js 已安装。"
-    return
-  fi
-  print_info "未找到 Node.js，正在安装最新版本..."
-  curl -fsSL https://deb.nodesource.com/setup_current.x | bash -
-  update_apt
-  install_package nodejs
+# 给用户添加 Docker 权限
+add_docker_permissions() {
+  sudo usermod -aG docker $USER
+  newgrp docker
 }
 
 # 安装 Aztec CLI
 install_aztec_cli() {
   print_info "安装 Aztec CLI 并准备 alpha 测试网..."
-  if ! curl -sL "$AZTEC_CLI_URL" | bash; then
-    echo "Aztec CLI 安装失败。"
-    exit 1
-  fi
-  export PATH="$HOME/.aztec/bin:$PATH"
-  if ! check_command aztec-up; then
-    echo "Aztec CLI 安装失败，未找到 aztec-up 命令。"
-    exit 1
-  fi
-  aztec-up alpha-testnet
-}
-
-# 验证 RPC URL 格式（检查是否以 http:// 或 https:// 开头）
-validate_url() {
-  local url=$1
-  local name=$2
-  if [[ ! "$url" =~ ^https?:// ]]; then
-    echo "错误：$name 格式无效，必须以 http:// 或 https:// 开头。"
-    exit 1
-  fi
-}
-
-# 验证以太坊地址格式
-validate_address() {
-  local address=$1
-  local name=$2
-  if [[ ! "$address" =~ ^0x[a-fA-F0-9]{40}$ ]]; then
-    echo "错误：$name 格式无效，必须是有效的以太坊地址（0x 开头的 40 位十六进制）。"
-    exit 1
-  fi
+  echo "y" | bash -i <(curl -s https://install.aztec.network)  # 自动输入 y 确认安装
+  echo 'export PATH="$HOME/.aztec/bin:$PATH"' >> ~/.bashrc
+  source ~/.bashrc
 }
 
 # 主逻辑：安装和启动 Aztec 节点
@@ -162,9 +93,8 @@ install_and_start_node() {
   docker rm aztec-sequencer 2>/dev/null || true
 
   # 安装依赖
+  install_dependencies
   install_docker
-  install_docker_compose
-  install_nodejs
   install_aztec_cli
 
   # 创建 Aztec 配置目录
