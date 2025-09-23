@@ -53,28 +53,42 @@ install_dependencies() {
 
 # 安装 Docker 和 Docker Compose
 install_docker() {
-  if check_command docker; then
-    local version
-    version=$(docker --version | grep -oP '\d+\.\d+\.\d+' || echo "0.0.0")
-    print_info "Docker 已安装，版本 $version"
-  else
-    print_info "未找到 Docker，正在安装..."
-    update_apt
-
-    install_package "apt-transport-https ca-certificates curl gnupg lsb-release"
-    sudo install -m 0755 -d /etc/apt/keyrings
-
-    . /etc/os-release
-    repo_url="https://download.docker.com/linux/$ID"
-    curl -fsSL "$repo_url/gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-    sudo chmod a+r /etc/apt/keyrings/docker.gpg
-
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] $repo_url $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-      sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-    sudo apt update -y
-    install_package "docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
+  if [ ! -f /etc/os-release ]; then
+    echo "Not Ubuntu or Debian"
+    exit 1
   fi
+  
+  sudo apt update -y && sudo apt upgrade -y
+  for pkg in docker.io docker-doc docker-compose podman-docker containerd runc docker-ce docker-ce-cli docker-buildx-plugin docker-compose-plugin; do
+    sudo apt-get remove --purge -y $pkg 2>/dev/null || true
+  done
+  sudo apt-get autoremove -y
+  sudo rm -rf /var/lib/docker /var/lib/containerd /etc/docker /etc/apt/sources.list.d/docker.list /etc/apt/keyrings/docker.gpg
+  
+  sudo apt-get update
+  sudo apt-get install -y ca-certificates curl gnupg lsb-release
+  sudo install -m 0755 -d /etc/apt/keyrings
+  
+  . /etc/os-release
+  repo_url="https://download.docker.com/linux/$ID"
+  curl -fsSL "$repo_url/gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  sudo chmod a+r /etc/apt/keyrings/docker.gpg
+  echo \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] $repo_url $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+    sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+  
+  sudo apt update -y && sudo apt upgrade -y
+  sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  
+  if sudo docker run hello-world; then
+    sudo docker rm $(sudo docker ps -a --filter "ancestor=hello-world" --format "{{.ID}}") --force 2>/dev/null || true
+    sudo docker image rm hello-world 2>/dev/null || true
+    sudo systemctl enable docker
+    sudo systemctl restart docker
+    clear
+    echo -e "\u2022 Docker Installed \u2714"
+  fi
+
 }
 
 # 给用户添加 Docker 权限
