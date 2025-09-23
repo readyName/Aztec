@@ -66,17 +66,12 @@ if sudo docker run hello-world; then
   echo -e "\u2022 Docker 已安装成功 ✅"
 fi
 
-# 提示：给当前用户添加 Docker 组权限
 echo "正在给当前用户添加 Docker 权限..."
 sudo usermod -aG docker $USER
 
-# 立即刷新当前 shell 会话的权限，并继续执行后续操作
 newgrp docker <<EOF
-
-# 提示：安装 Aztec CLI
 echo "正在安装 Aztec CLI..."
 yes y | bash -i <(curl -s https://install.aztec.network)
-
 EOF
 
 echo "Aztec CLI 安装完成！"
